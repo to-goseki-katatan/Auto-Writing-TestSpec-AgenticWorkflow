@@ -2,7 +2,8 @@
 
 A sample repository showing how to keep a [KATATAN](https://katatan.com) test specification up to date automatically.
 When a pull request is merged, an AI agent reads what the PR implemented, designs manual test cases for it,
-and appends them to a KATATAN test specification. It then comments the list of added cases on the PR.
+and appends them to a KATATAN test specification. It then opens a review issue for QA that lists every added case
+(case number, steps, expected result) and links it from the merged PR.
 
 The whole setup is a single workflow file:
 [`.github/workflows/katatan-testspec-from-pr.md`](.github/workflows/katatan-testspec-from-pr.md).
@@ -19,7 +20,8 @@ flowchart TD
     C -->|noop: nothing to test| X[Done]
     D --> E["Custom safe-output job<br/>validate JSON → katatan test-case batch-create"]
     E --> F[KATATAN test specification]
-    E --> G[Comment on the merged PR]
+    E --> G["QA review issue<br/>(checklist + case details)"]
+    G --> H[Comment on the merged PR<br/>linking the issue]
 ```
 
 1. **Trigger**: `pull_request` `closed` with `merged == true`. You can also run it manually with `workflow_dispatch` and a PR number.
@@ -32,20 +34,47 @@ flowchart TD
 4. **Custom safe-output job**: runs after gh-aw's threat detection. It does three things:
    - validates the cases against KATATAN's limits
    - appends them with `katatan test-case batch-create`
-   - posts a summary comment on the PR
+   - reports what was added (see below)
 
-Example PR comment:
+## Reviewing the generated test cases
 
-> ### 🧪 KATATAN test cases added
+The workflow writes to KATATAN right away, so review happens afterwards. Each run with new cases
+reports what was added in three places:
+
+- **QA review issue** (label `katatan-review`, optionally assigned to QA). It contains:
+  - a checklist with one item per added case, such as `- [ ] case-12: ...`
+  - a collapsible block per case with its preconditions, steps, expected result, and notes
+  - a link to the specification in KATATAN
+- **PR comment** on the merged PR: the case numbers and subjects, plus a link to the review issue.
+- **Job summary** of the Actions run: the same report as the issue.
+
+QA reviews each case in KATATAN, fixes or deletes it there if needed, and ticks it off in the issue.
+Closing the issue marks the review as done. Open `katatan-review` issues are the review backlog.
+
+Example review issue (`Review 2 KATATAN test case(s) from #3: Add name input to greeting`):
+
+> The following test cases were generated from #3 and appended to the KATATAN test specification `<projectId>.<specId>`.
+> Please review each case in KATATAN, fix or delete it if needed, and tick it off here.
 >
-> Covers the new argument validation in the greeting script.
+> ### Review checklist
 >
-> 2 test case(s) were appended to the test specification `<projectId>.<specId>`.
+> - [ ] **case-12**: Greeting shows the entered name
+> - [ ] **case-13**: Empty name shows a warning
 >
-> | Case | Test subject | Steps |
-> | --- | --- | --- |
-> | case-12 | Greeting fails when no name is given | 2 |
-> | case-13 | Greeting prints the given name | 1 |
+> ### Test case details
+>
+> <details><summary><b>case-12</b>: Greeting shows the entered name</summary>
+>
+> **Steps**
+>
+> 1. Type Alice into the name field
+> 2. Click Say hello
+>
+> **Expected result**
+>
+> An alert shows "Hello, Alice"
+>
+> </details>
 
 ## Security design
 
@@ -53,6 +82,8 @@ The agent never writes to KATATAN directly and never sees the KATATAN token.
 
 - The agent job has only `contents: read` and `pull-requests: read`.
   The agent's output is only a *request*, a JSON string passed to a safe-output tool.
+- Only the custom safe-output job gets `issues: write` and `pull-requests: write`,
+  which it uses to open the review issue and comment on the PR.
 - `KATATAN_TOKEN` is passed only to two steps that run outside the agent's sandbox:
   - the pre-step that lists existing cases
   - the custom safe-output job
@@ -83,6 +114,8 @@ The agent never writes to KATATAN directly and never sees the KATATAN token.
 | --- | --- | --- |
 | Secret | `KATATAN_TOKEN` | The KATATAN access token from step 1 |
 | Variable | `KATATAN_SPEC_ID` | The composite spec ID `<projectId>.<specId>` |
+| Variable (optional) | `KATATAN_WORKSPACE_ID` | Your KATATAN workspace ID, found in the app URL `app.katatan.com/workspace/<workspaceId>/...`. When set, the review issue links to the spec in KATATAN |
+| Variable (optional) | `KATATAN_QA_ASSIGNEES` | Comma-separated GitHub users to assign the review issue to, such as `alice,bob` |
 
 ```sh
 gh secret set KATATAN_TOKEN
